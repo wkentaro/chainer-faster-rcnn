@@ -67,31 +67,50 @@ def draw_result(out, im_scale, clss, bbox, nms_thresh, conf):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--img_fn', type=str, default='sample.jpg')
-    parser.add_argument('--out_fn', type=str, default='result.jpg')
     parser.add_argument('--nms_thresh', type=float, default=0.3)
     parser.add_argument('--conf', type=float, default=0.8)
-    parser.add_argument('--gpu', type=int, default=-1)
+    parser.add_argument('--gpu', type=int, default=0)
     args = parser.parse_args()
+
+    import os
+    import os.path as osp
+    img_dir = 'camera_frames_v1/80fe0594097fb79ed074dbbc3a471f86d3e432fc4e2fe4f0c2260d43d339f6e8/images'
+    out_dir = 'result'
+    if not osp.exists(out_dir):
+        os.mkdir(out_dir)
 
     xp = chainer.cuda.cupy if chainer.cuda.available and args.gpu >= 0 else np
     model = get_model(gpu=args.gpu)
     if chainer.cuda.available and args.gpu >= 0:
         model.to_gpu(args.gpu)
 
-    orig_image = cv.imread(args.img_fn)
-    img, im_scale = img_preprocessing(orig_image, PIXEL_MEANS)
-    img = np.expand_dims(img, axis=0)
-    if args.gpu >= 0:
-        img = to_gpu(img, device=args.gpu)
-    img = chainer.Variable(img, volatile=True)
-    h, w = img.data.shape[2:]
-    cls_score, bbox_pred = model(img, np.array([[h, w, im_scale]]))
-    cls_score = cls_score.data
+    for img_fn in os.listdir(img_dir):
+        img_fn = osp.join(img_dir, img_fn)
+        if not any(img_fn.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.bmp']):
+            continue
 
-    if args.gpu >= 0:
-        cls_score = chainer.cuda.cupy.asnumpy(cls_score)
-        bbox_pred = chainer.cuda.cupy.asnumpy(bbox_pred)
-    result = draw_result(orig_image, im_scale, cls_score, bbox_pred,
-                         args.nms_thresh, args.conf)
-    cv.imwrite(args.out_fn, result)
+        out_fn = osp.join(out_dir, osp.basename(img_fn))
+        # if osp.exists(out_fn):
+        #     continue
+        print(img_fn)
+
+        orig_image = cv.imread(img_fn)
+        img, im_scale = img_preprocessing(orig_image, PIXEL_MEANS)
+        img = np.expand_dims(img, axis=0)
+        if args.gpu >= 0:
+            img = to_gpu(img, device=args.gpu)
+        img = chainer.Variable(img, volatile=True)
+        h, w = img.data.shape[2:]
+        import time
+        t_start = time.time()
+        cls_score, bbox_pred = model(img, np.array([[h, w, im_scale]]))
+        print('{} [s]'.format(time.time() - t_start))
+        break
+        cls_score = cls_score.data
+
+        if args.gpu >= 0:
+            cls_score = chainer.cuda.cupy.asnumpy(cls_score)
+            bbox_pred = chainer.cuda.cupy.asnumpy(bbox_pred)
+        result = draw_result(orig_image, im_scale, cls_score, bbox_pred,
+                            args.nms_thresh, args.conf)
+        cv.imwrite(out_fn, result)
