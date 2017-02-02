@@ -11,19 +11,19 @@ import chainer
 import cv2 as cv
 import numpy as np
 
-CLASSES = ('__background__',
-           'aeroplane', 'bicycle', 'bird', 'boat',
-           'bottle', 'bus', 'car', 'cat', 'chair',
-           'cow', 'diningtable', 'dog', 'horse',
-           'motorbike', 'person', 'pottedplant',
-           'sheep', 'sofa', 'train', 'tvmonitor')
 PIXEL_MEANS = np.array([[[102.9801, 115.9465, 122.7717]]])
 
 
-def get_model(gpu):
-    model = FasterRCNN(gpu)
+def get_model(gpu, dataset, num_classes):
+    model = FasterRCNN(gpu, num_classes=num_classes)
     model.train = False
-    serializers.load_npz('data/VGG16_faster_rcnn_final.model', model)
+    if dataset == 'pascal':
+        serializers.load_npz('data/VGG16_faster_rcnn_final.model', model)
+    elif dataset == 'coco':
+        serializers.load_hdf5(
+            'data/coco_vgg16_faster_rcnn_final.chainermodel.h5', model)
+    else:
+        raise ValueError
 
     return model
 
@@ -42,9 +42,10 @@ def img_preprocessing(orig_img, pixel_means, max_size=1000, scale=600):
     return img.transpose([2, 0, 1]).astype(np.float32), im_scale
 
 
-def draw_result(out, im_scale, clss, bbox, nms_thresh, conf):
+def draw_result(out, im_scale, clss, bbox, nms_thresh, conf, class_names):
     CV_AA = 16
-    for cls_id in range(1, 21):
+    num_classes = len(class_names)
+    for cls_id in range(1, num_classes):
         _cls = clss[:, cls_id][:, np.newaxis]
         _bbx = bbox[:, cls_id * 4: (cls_id + 1) * 4]
         dets = np.hstack((_bbx, _cls))
@@ -56,10 +57,10 @@ def draw_result(out, im_scale, clss, bbox, nms_thresh, conf):
             x1, y1, x2, y2 = map(int, dets[i, :4])
             cv.rectangle(out, (x1, y1), (x2, y2), (0, 0, 255), 2, CV_AA)
             ret, baseline = cv.getTextSize(
-                CLASSES[cls_id], cv.FONT_HERSHEY_SIMPLEX, 0.8, 1)
+                class_names[cls_id], cv.FONT_HERSHEY_SIMPLEX, 0.8, 1)
             cv.rectangle(out, (x1, y2 - ret[1] - baseline),
                          (x1 + ret[0], y2), (0, 0, 255), -1)
-            cv.putText(out, CLASSES[cls_id], (x1, y2 - baseline),
+            cv.putText(out, class_names[cls_id], (x1, y2 - baseline),
                        cv.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 1, CV_AA)
 
     return out
@@ -72,10 +73,25 @@ if __name__ == '__main__':
     parser.add_argument('--nms_thresh', type=float, default=0.3)
     parser.add_argument('--conf', type=float, default=0.8)
     parser.add_argument('--gpu', type=int, default=-1)
+    parser.add_argument('--dataset', choices=['pascal', 'coco'],
+                        default='pascal')
     args = parser.parse_args()
 
+    if args.dataset == 'pascal':
+        class_names = ('__background__',
+           'aeroplane', 'bicycle', 'bird', 'boat',
+           'bottle', 'bus', 'car', 'cat', 'chair',
+           'cow', 'diningtable', 'dog', 'horse',
+           'motorbike', 'person', 'pottedplant',
+           'sheep', 'sofa', 'train', 'tvmonitor')
+    else:
+        import yaml
+        class_names = yaml.load(open('data/coco_class_names.yaml'))
+        class_names.insert(0, '__background__')
+
     xp = chainer.cuda.cupy if chainer.cuda.available and args.gpu >= 0 else np
-    model = get_model(gpu=args.gpu)
+    model = get_model(gpu=args.gpu, dataset=args.dataset,
+                      num_classes=len(class_names))
     if chainer.cuda.available and args.gpu >= 0:
         model.to_gpu(args.gpu)
 
@@ -93,5 +109,5 @@ if __name__ == '__main__':
         cls_score = chainer.cuda.cupy.asnumpy(cls_score)
         bbox_pred = chainer.cuda.cupy.asnumpy(bbox_pred)
     result = draw_result(orig_image, im_scale, cls_score, bbox_pred,
-                         args.nms_thresh, args.conf)
+                         args.nms_thresh, args.conf, class_names)
     cv.imwrite(args.out_fn, result)
